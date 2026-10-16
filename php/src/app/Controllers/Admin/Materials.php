@@ -9,16 +9,15 @@ class Materials extends BaseController
 {
     protected $professionRepo;
     protected $materialRepo;
+    protected $ollamaClient; // Добавили свойство
 
     public function __construct()
     {
         $this->professionRepo = Services::professionRepository();
         $this->materialRepo = Services::materialRepository();
+        $this->ollamaClient = Services::ollamaClient(); // Инициализация ИИ
     }
 
-    /**
-     * Главная страница: список профессий и формы
-     */
     public function index()
     {
         $data = [
@@ -29,9 +28,6 @@ class Materials extends BaseController
         return view('admin/materials/index', $data);
     }
 
-    /**
-     * Обработка создания профессии
-     */
     public function createProfession()
     {
         $name = $this->request->getPost('name');
@@ -44,12 +40,6 @@ class Materials extends BaseController
         return redirect()->to('/admin/materials')->with('error', 'Название не может быть пустым.');
     }
 
-    /**
-     * Обработка загрузки методички (пока сохраняем как один сырой текст для проверки)
-     */
-    /**
-     * Обработка загрузки методички в формате PDF
-     */
     public function uploadFile()
     {
         $professionId = $this->request->getPost('profession_id');
@@ -60,21 +50,37 @@ class Materials extends BaseController
         }
 
         try {
-            // Инициализируем установленный парсер PDF документов
+            // 1. Извлекаем весь текст из PDF
             $parser = new \Smalot\PdfParser\Parser();
             $pdf = $parser->parseFile($file->getTempName());
+            $fullText = $pdf->getText();
 
-            // Извлекаем чистый текст со всех страниц
-            $textContent = $pdf->getText();
-
-            if (empty(trim($textContent))) {
-                return redirect()->to('/admin/materials')->with('error', 'Не удалось извлечь текст из PDF (возможно, файл защищен или содержит только сканы-картинки).');
+            if (empty(trim($fullText))) {
+                return redirect()->to('/admin/materials')->with('error', 'Не удалось извлечь текст из PDF.');
             }
 
-            // Временная заглушка пустого вектора (1024 нуля для модели bge-m3)
-            $this->materialRepo->saveChunk((int)$professionId, $textContent, array_fill(0, 1024, 0));
+            // 2. Нарезаем текст на умные куски (чанки)
+            $splitter = new \App\Libraries\TextSplitter();
+            $chunks = $splitter->splitText($fullText, 1200, 200);
 
-            return redirect()->to('/admin/materials')->with('success', 'Текст из PDF успешно извлечен и сохранен в Postgres!');
+            $savedCount = 0;
+
+            // 3. Циклом отправляем каждый чанк в Ollama и сохраняем в Postgres
+            foreach ($chunks as $chunkText) {
+                // Запрос к модели bge-m3 на Windows-сервере
+                $embedding = $this->ollamaClient->getEmbedding($chunkText);
+
+                if (!empty($embedding)) {
+                    // Сохраняем кусок текста и его персональный вектор в Postgres
+                    $this->materialRepo->saveChunk((int)$professionId, $chunkText, $embedding);
+                    $savedCount++;
+                }
+            }
+
+            return redirect()->to('/admin/materials')->with(
+                'success',
+                "Документ успешно обработан! Разбит на {$savedCount} чанков. Для каждого сгенерирован реальный эмбеддинг!"
+            );
 
         } catch (\Exception $e) {
             return redirect()->to('/admin/materials')->with('error', 'Ошибка при обработке PDF: ' . $e->getMessage());

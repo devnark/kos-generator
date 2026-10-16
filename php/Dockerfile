@@ -10,12 +10,13 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Компилируем расширения PHP (добавили zip для работы со сжатыми данными PDF)
+# Компилируем расширения PHP
 RUN docker-php-ext-configure intl \
     && docker-php-ext-install -j$(nproc) \
         intl \
         pdo_pgsql \
         pgsql \
+        mysqli \
         sockets \
         bcmath \
         zip
@@ -25,6 +26,4 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 WORKDIR /usr/local/apache2/htdocs
 
-# При сборке образа автоматически накатываем зависимости, если изменится composer.json
-# (Docker закеширует этот слой, если файлы не менялись)
 CMD composer install && php-fpm

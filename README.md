@@ -10,3 +10,4 @@ docker exec -it generator_php php spark migrate
 Генерация моделей
 docker exec -it generator_php php spark make:model ProfessionModel
 
+Используем ollama pull bge-m3 для нарезки pdf в вектор

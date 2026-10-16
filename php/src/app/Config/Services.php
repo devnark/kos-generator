@@ -30,4 +30,16 @@ class Services extends BaseService
         return new \App\Repositories\ProfessionRepository();
     }
 
+    /**
+     * Возвращает синглтон клиента Ollama
+     */
+    public static function ollamaClient($getShared = true): \App\Libraries\OllamaClient
+    {
+        if ($getShared) {
+            // Имя в кавычках должно ТОЧНО совпадать с именем метода
+            return static::getSharedInstance('ollamaClient');
+        }
+        return new \App\Libraries\OllamaClient();
+    }
+
 }
