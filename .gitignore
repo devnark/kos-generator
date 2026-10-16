@@ -1,3 +1,4 @@
 # Docker данные
 .volumes/
+*.idea*
 pgdata/
