@@ -14,3 +14,8 @@ $routes->group('admin/materials', function($routes) {
     $routes->post('upload', '\App\Controllers\Admin\Materials::uploadFile');
 });
 
+$routes->group('admin/generator', function($routes) {
+    $routes->get('/', '\App\Controllers\Admin\Generator::index');
+    $routes->post('create', '\App\Controllers\Admin\Generator::create');
+    $routes->get('status/(:num)', '\App\Controllers\Admin\Generator::checkStatus/$1');
+});

@@ -24,6 +24,7 @@ class ImportFewShots extends BaseCommand
             SELECT id, data 
             FROM igvs_courses_modules_contents 
             WHERE course_id = 1842
+            AND template_id in (1,2)
         ");
 
         $rows = $query->getResultArray();

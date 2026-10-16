@@ -12,7 +12,8 @@
     "require": {
         "php": "^8.2",
         "codeigniter4/framework": "^4.7",
-        "smalot/pdfparser": "^2.10"
+        "smalot/pdfparser": "^2.10",
+        "php-amqplib/php-amqplib": "^3.5"
     },
     "require-dev": {
         "fakerphp/faker": "^1.9",

@@ -6,7 +6,7 @@ use CodeIgniter\Model;
 
 class FewShotModel extends Model
 {
-    protected $table            = 'fewshots';
+    protected $table            = 'few_shots';
     protected $primaryKey       = 'id';
     protected $useAutoIncrement = true;
     protected $returnType       = 'array';
