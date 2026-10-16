@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # Веб-сервер Apache
+  apache:
+    image: httpd:2.4-alpine
+    container_name: generator_apache
+    ports:
+      - "80:80"
+    volumes:
+      - ./php/src:/usr/local/apache2/htdocs
+      # Подключаем только файл конфигурации виртуального хоста
+      - ./apache/generator.local.conf:/usr/local/apache2/conf/extra/httpd-vhosts.conf
+    # Включаем прокси-модули и загружаем наш конфиг при старте
+    command: >
+      httpd -D FOREGROUND
+      -c "LoadModule proxy_module modules/mod_proxy.so"
+      -c "LoadModule proxy_fcgi_module modules/mod_proxy_fcgi.so"
+      -c "LoadModule rewrite_module modules/mod_rewrite.so"
+      -c "Include conf/extra/httpd-vhosts.conf"
+    networks:
+      - generator-network
+    depends_on:
+      - php
+
+  # PHP-FPM для обработки скриптов
+  php:
+    image: php:8.2-fpm-alpine
+    container_name: generator_php
+    volumes:
+      - ./php/src:/usr/local/apache2/htdocs
+    networks:
+      - generator-network
+
+  # PostgreSQL с расширением pgvector
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: generator_postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: generator_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - generator-network
+
+  # RabbitMQ с веб-панелью управления
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: generator_rabbitmq
+    ports:
+      - "5672:5672"       # Порт для подключения из PHP кода
+      - "15672:15672"     # Панель управления (логин/пароль: guest/guest)
+    networks:
+      - generator-network
+
+volumes:
+  pgdata:
+
+networks:
+  generator-network:
+    driver: bridge
+
