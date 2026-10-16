@@ -70,10 +70,11 @@
         </div>
 
         <!-- Правая колонка: Загрузка методичек -->
+        <!-- Правая колонка: Загрузка методичек -->
         <div class="col-md-7">
             <div class="card shadow-sm">
                 <div class="card-header bg-success text-white d-flex align-items-center">
-                    <i class="bi bi-file-earmark-arrow-up me-2"></i> Загрузить методический материал (RAG)
+                    <i class="bi bi-file-earmark-pdf me-2"></i> Загрузить методический материал (RAG)
                 </div>
                 <div class="card-body">
                     <form action="/admin/materials/upload" method="POST" enctype="multipart/form-data">
@@ -91,15 +92,16 @@
                         </div>
 
                         <div class="mb-3">
-                            <label class="form-label">Файл методички (только .txt или .md)</label>
-                            <input type="file" name="schema_file" class="form-control" accept=".txt,.md" required>
+                            <label class="form-label">Файл методички (документ в формате PDF)</label>
+                            <!-- Изменили accept на .pdf -->
+                            <input type="file" name="schema_file" class="form-control" accept=".pdf" required>
                             <div class="form-text text-muted">
-                                <i class="bi bi-info-circle me-1"></i> Текст будет автоматически прочитан и сохранен в Postgres.
+                                <i class="bi bi-info-circle me-1"></i> Текст из PDF будет автоматически извлечен, разбит на смысловые куски и проиндексирован ИИ.
                             </div>
                         </div>
 
                         <button type="submit" class="btn btn-success w-100" <?= empty($professions) ? 'disabled' : '' ?>>
-                            <i class="bi bi-lightning-charge me-1"></i> Проиндексировать материал
+                            <i class="bi bi-lightning-charge me-1"></i> Извлечь текст и проиндексировать
                         </button>
                     </form>
                 </div>
