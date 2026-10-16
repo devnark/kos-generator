@@ -42,56 +42,60 @@ class Materials extends BaseController
 
     public function uploadFile()
     {
+        set_time_limit(0);
         $professionId = $this->request->getPost('profession_id');
         $file = $this->request->getFile('schema_file');
+        $documentTitle = trim($this->request->getPost('document_title') ?? '');
 
         if (!$file->isValid() || $file->getExtension() !== 'pdf') {
             return redirect()->to('/admin/materials')->with('error', 'Пожалуйста, загрузите корректный файл в формате PDF.');
         }
 
+        if (empty($documentTitle)) {
+            $documentTitle = $file->getClientName();
+        }
+
         try {
-            // 1. Извлекаем весь текст из PDF
+            $pdfPath = $file->getTempName();
+
+            // Инициализируем парсер
             $parser = new \Smalot\PdfParser\Parser();
-            $pdf = $parser->parseFile($file->getTempName());
-            $fullText = $pdf->getText();
+            $pdf = $parser->parseFile($pdfPath);
 
-            // Забираем название документа из POST
-            $documentTitle = trim($this->request->getPost('document_title') ?? '');
-
-            // АВТОМАТИЗАЦИЯ: Если поле пустое, берем оригинальное имя загруженного PDF-файла
-            if (empty($documentTitle)) {
-                $documentTitle = $file->getClientName(); // Вернет, например, "metodichka_manikyur.pdf"
-            }
-
-            if (empty(trim($fullText))) {
-                return redirect()->to('/admin/materials')->with('error', 'Не удалось извлечь текст из PDF.');
-            }
-
-            // 2. Нарезаем текст на умные куски (чанки)
+            // Получаем ВСЕ страницы документа по отдельности
+            $pages = $pdf->getPages();
             $splitter = new \App\Libraries\TextSplitter();
-            $chunks = $splitter->splitText($fullText, 1200, 200);
-
             $savedCount = 0;
 
-            // 3. Циклом отправляем каждый чанк в Ollama и сохраняем в Postgres
-            foreach ($chunks as $chunkText) {
-                // Запрос к модели bge-m3 на Windows-сервере
-                $embedding = $this->ollamaClient->getEmbedding($chunkText);
+            // Перебираем страницы циклично. Переменная $pageNum — это реальная страница в книге!
+            foreach ($pages as $index => $page) {
+                $pageNum = $index + 1; // Страницы нумеруются с 1
+                $pageText = $page->getText();
 
-                if (!empty($embedding)) {
-                    // Сохраняем кусок текста и его персональный вектор в Postgres
-                    $this->materialRepo->saveChunk((int)$professionId, $chunkText, $embedding, $documentTitle);
-                    $savedCount++;
+                if (empty(trim($pageText))) {
+                    continue; // Пропускаем пустые страницы
+                }
+
+                // Нарезаем текст ТЕКУЩЕЙ СТРАНИЦЫ на чанки
+                $chunks = $splitter->splitText($pageText, 1200, 150);
+
+                foreach ($chunks as $chunkText) {
+                    // Генерируем эмбеддинг для чанка
+                    $embedding = $this->ollamaClient->getEmbedding($chunkText);
+
+                    if (!empty($embedding)) {
+                        // Сохраняем в базу, передавая РЕАЛЬНЫЙ номер страницы $pageNum
+                        $this->materialRepo->saveChunk((int)$professionId, $chunkText, $embedding, $documentTitle, $pageNum);
+                        $savedCount++;
+                    }
                 }
             }
 
-            return redirect()->to('/admin/materials')->with(
-                'success',
-                "Документ успешно обработан! Разбит на {$savedCount} чанков. Для каждого сгенерирован реальный эмбеддинг!"
-            );
+            return redirect()->to('/admin/materials')->with('success', "Документ успешно проиндексирован постранично! Создано чанков с точной адресацией: {$savedCount}.");
 
         } catch (\Exception $e) {
             return redirect()->to('/admin/materials')->with('error', 'Ошибка при обработке PDF: ' . $e->getMessage());
         }
     }
+
 }

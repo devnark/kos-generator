@@ -11,7 +11,7 @@ class MaterialModel extends Model
     protected $useAutoIncrement = true;
     protected $returnType       = 'array';
 
-    protected $allowedFields = ['profession_id', 'text_chunk', 'embedding', 'document_title'];
+    protected $allowedFields = ['profession_id', 'text_chunk', 'embedding', 'document_title', 'page_number'];
 
     protected $useTimestamps    = false;
 }
