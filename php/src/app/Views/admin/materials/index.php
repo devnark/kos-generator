@@ -70,7 +70,6 @@
         </div>
 
         <!-- Правая колонка: Загрузка методичек -->
-        <!-- Правая колонка: Загрузка методичек -->
         <div class="col-md-7">
             <div class="card shadow-sm">
                 <div class="card-header bg-success text-white d-flex align-items-center">
@@ -90,7 +89,10 @@
                                 </select>
                             </div>
                         </div>
-
+                        <div class="mb-3">
+                            <label class="form-label">Официальное название документа / ГОСТ (необязательно)</label>
+                            <input type="text" name="document_title" class="form-control" placeholder="Например: ГОСТ Р 58091-2018. Или оставьте пустым — возьмем имя файла">
+                        </div>
                         <div class="mb-3">
                             <label class="form-label">Файл методички (документ в формате PDF)</label>
                             <!-- Изменили accept на .pdf -->

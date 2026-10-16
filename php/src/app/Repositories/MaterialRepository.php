@@ -16,40 +16,36 @@ class MaterialRepository implements MaterialRepositoryInterface
     /**
      * Сохранение нового куска методички с вектором
      */
-    public function saveChunk(int $professionId, string $textChunk, array $vector): int
+    public function saveChunk(int $professionId, string $textChunk, array $vector, string $documentTitle): int
     {
-        // Превращаем PHP-массив эмбеддинга в строку '[0.11,0.22,...]' для pgvector
         $vectorString = '[' . implode(',', $vector) . ']';
 
         $data = [
             'profession_id' => $professionId,
-            'text_chunk'    => $textChunk,
-            'embedding'     => $vectorString
+            'text_chunk' => $textChunk,
+            'embedding' => $vectorString,
+            'document_title' => $documentTitle // Сохраняем имя файла / ГОСТ
         ];
 
         $this->materialModel->insert($data);
-
         return $this->materialModel->getInsertID();
     }
 
-    /**
-     * Семантический поиск по векторам (RAG контекст для ИИ)
-     */
     public function findNearestChunks(array $vector, int $professionId, int $limit = 3): array
     {
         $vectorString = '[' . implode(',', $vector) . ']';
 
-        // Строим чистый и оптимизированный SQL-запрос
+        // Добавляем выборку поля document_title в SQL запрос
         return $this->materialModel->db->query("
-            SELECT id, text_chunk, (embedding <=> :vector:) AS distance
+            SELECT id, text_chunk, document_title, (embedding <=> :vector:) AS distance
             FROM materials
             WHERE profession_id = :profession_id:
             ORDER BY embedding <=> :vector: ASC
             LIMIT :limit:
         ", [
-            'vector'        => $vectorString,
+            'vector' => $vectorString,
             'profession_id' => $professionId,
-            'limit'         => $limit
+            'limit' => $limit
         ])->getResultArray();
     }
 }

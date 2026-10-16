@@ -55,6 +55,14 @@ class Materials extends BaseController
             $pdf = $parser->parseFile($file->getTempName());
             $fullText = $pdf->getText();
 
+            // Забираем название документа из POST
+            $documentTitle = trim($this->request->getPost('document_title') ?? '');
+
+            // АВТОМАТИЗАЦИЯ: Если поле пустое, берем оригинальное имя загруженного PDF-файла
+            if (empty($documentTitle)) {
+                $documentTitle = $file->getClientName(); // Вернет, например, "metodichka_manikyur.pdf"
+            }
+
             if (empty(trim($fullText))) {
                 return redirect()->to('/admin/materials')->with('error', 'Не удалось извлечь текст из PDF.');
             }
@@ -72,7 +80,7 @@ class Materials extends BaseController
 
                 if (!empty($embedding)) {
                     // Сохраняем кусок текста и его персональный вектор в Postgres
-                    $this->materialRepo->saveChunk((int)$professionId, $chunkText, $embedding);
+                    $this->materialRepo->saveChunk((int)$professionId, $chunkText, $embedding, $documentTitle);
                     $savedCount++;
                 }
             }
