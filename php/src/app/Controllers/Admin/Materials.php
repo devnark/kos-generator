@@ -50,28 +50,34 @@ class Materials extends BaseController
         }
 
         try {
-            // 1. Извлекаем весь текст из PDF
-            $parser = new \Smalot\PdfParser\Parser();
-            $pdf = $parser->parseFile($file->getTempName());
-            $fullText = $pdf->getText();
+            $pdfPath = $file->getTempName();
 
-            if (empty(trim($fullText))) {
-                return redirect()->to('/admin/materials')->with('error', 'Не удалось извлечь текст из PDF.');
+            // 1. Извлекаем обычный текст
+            $parser = new \Smalot\PdfParser\Parser();
+            $pdf = $parser->parseFile($pdfPath);
+            $ordinaryText = $pdf->getText();
+
+            // 2. АВТОМАТИЗАЦИЯ: Вызываем Python-скрипт для поиска и форматирования таблиц
+            $pythonScript = APPPATH . 'Libraries/table_parser.py';
+            // Выполняем команду внутри контейнера Linux
+            $command = "python3 " . escapeshellarg($pythonScript) . " " . escapeshellarg($pdfPath);
+            $tablesText = shell_exec($command);
+
+            // 3. Склеиваем обычный текст и идеально отформатированные таблицы вместе
+            $fullContent = $ordinaryText . "\n\n" . $tablesText;
+
+            if (empty(trim($fullContent))) {
+                return redirect()->to('/admin/materials')->with('error', 'Не удалось извлечь данные из PDF.');
             }
 
-            // 2. Нарезаем текст на умные куски (чанки)
+            // 4. Нарезаем склеенный текст на чанки и отправляем в Ollama
             $splitter = new \App\Libraries\TextSplitter();
-            $chunks = $splitter->splitText($fullText, 1200, 200);
+            $chunks = $splitter->splitText($fullContent, 1200, 200);
 
             $savedCount = 0;
-
-            // 3. Циклом отправляем каждый чанк в Ollama и сохраняем в Postgres
             foreach ($chunks as $chunkText) {
-                // Запрос к модели bge-m3 на Windows-сервере
                 $embedding = $this->ollamaClient->getEmbedding($chunkText);
-
                 if (!empty($embedding)) {
-                    // Сохраняем кусок текста и его персональный вектор в Postgres
                     $this->materialRepo->saveChunk((int)$professionId, $chunkText, $embedding);
                     $savedCount++;
                 }
@@ -79,7 +85,7 @@ class Materials extends BaseController
 
             return redirect()->to('/admin/materials')->with(
                 'success',
-                "Документ успешно обработан! Разбит на {$savedCount} чанков. Для каждого сгенерирован реальный эмбеддинг!"
+                "Документ успешно обработан! Обычный текст извлечен, таблицы автоматически переведены в Markdown-формат. Создано чанков: {$savedCount}."
             );
 
         } catch (\Exception $e) {

@@ -12,7 +12,7 @@ class FewShotModel extends Model
     protected $returnType       = 'array';
     protected $useSoftDeletes   = false;
     protected $protectFields    = true;
-    protected $allowedFields    = [];
+    protected $allowedFields = ['profession_id', 'type', 'question', 'options', 'correct_answer', 'rationale'];
 
     protected bool $allowEmptyInserts = false;
     protected bool $updateOnlyChanged = true;

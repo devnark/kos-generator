@@ -132,16 +132,22 @@
     </div>
 </div>
 
-<!-- Модальное окно просмотра готового JSON теста -->
+<!-- Модальное окно просмотра готового теста -->
 <div class="modal fade" id="jsonModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg">
             <div class="modal-header bg-dark text-white">
-                <h5 class="modal-title"><i class="bi bi-braces text-info me-2"></i>Финальный JSON от ИИ-Критика</h5>
+                <h5 class="modal-title"><i class="bi bi-patch-check text-success header-icon me-2"></i> Проверка сгенерированного теста</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            <div class="modal-body bg-light p-0">
-                <pre id="jsonViewer" class="p-3 m-0" style="max-height: 500px; overflow-y: auto; font-family: monospace; font-size: 14px;"></pre>
+            <div class="modal-body p-4 bg-light">
+                <!-- Сюда JS будет вставлять красивую разметку -->
+                <div id="testVisualPreview"></div>
+
+                <hr class="my-4">
+
+                <h6><i class="bi bi-file-code text-secondary me-2"></i>Сырой JSON ответ (для экспорта):</h6>
+                <pre id="jsonViewer" class="p-3 bg-white border rounded" style="max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 13px;"></pre>
             </div>
         </div>
     </div>
@@ -155,10 +161,32 @@
         // Клик на кнопку просмотра JSON тестов
         $(document).on('click', '.btn-view-json', function() {
             let taskId = $(this).data('id');
-            // Заменили путь на явный через base_url()
             $.getJSON('<?= base_url("admin/generator/status") ?>/' + taskId, function(data) {
                 if (data.status === 'done') {
-                    $('#jsonViewer').text(JSON.stringify(data.result, null, 4));
+                    let test = data.result;
+
+                    // Генерируем красивый HTML-вид теста
+                    let html = '<h4 class="mb-3 text-dark">' + test.question + '</h4>';
+                    html += '<div class="list-group mb-4 shadow-sm">';
+
+                    test.options.forEach(function(opt) {
+                        // Проверяем, является ли этот вариант правильным
+                        let isCorrect = test.correct.includes(opt);
+                        let activeClass = isCorrect ? 'list-group-item-success fw-bold' : 'bg-white';
+                        let icon = isCorrect ? '<i class="bi bi-check-circle-fill text-success me-2"></i>' : '<i class="bi bi-circle me-2 text-muted"></i>';
+
+                        html += '<div class="list-group-item ' + activeClass + '">' + icon + opt + '</div>';
+                    });
+                    html += '</div>';
+
+                    // Добавляем блок обоснования основания
+                    html += '<div class="card border-info bg-white shadow-sm">';
+                    html += '  <div class="card-header bg-info text-white fw-bold"><i class="bi bi-info-square me-2"></i>Основание верности ответа (Контекст методички):</div>';
+                    html += '  <div class="card-body text-secondary" style="font-size: 15px; line-height: 1.6;">' + (test.rationale ? test.rationale : "Обоснование отсутствует.") + '</div>';
+                    html += '</div>';
+
+                    $('#testVisualPreview').html(html);
+                    $('#jsonViewer').text(JSON.stringify(test, null, 4));
                     new bootstrap.Modal($('#jsonModal')).show();
                 }
             });

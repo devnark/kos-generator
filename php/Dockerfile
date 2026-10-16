@@ -1,6 +1,6 @@
 FROM php:8.2-fpm
 
-# Устанавливаем системные зависимости + утилиты для Composer
+# 1. Системные зависимости + утилиты для Composer + Python для таблиц
 RUN apt-get update && apt-get install -y \
     libicu-dev \
     libpq-dev \
@@ -8,9 +8,14 @@ RUN apt-get update && apt-get install -y \
     zip \
     unzip \
     git \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# Компилируем расширения PHP
+# 2. Устанавливаем библиотеку pdfplumber для автоматического парсинга таблиц
+RUN pip3 install --no-cache-dir pdfplumber --break-system-packages
+
+# 3. Компилируем расширения PHP (все твои модули на месте)
 RUN docker-php-ext-configure intl \
     && docker-php-ext-install -j$(nproc) \
         intl \
@@ -21,9 +26,10 @@ RUN docker-php-ext-configure intl \
         bcmath \
         zip
 
-# Устанавливаем свежий Composer прямо внутрь образа
+# 4. Устанавливаем свежий Composer прямо внутрь образа
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 WORKDIR /usr/local/apache2/htdocs
 
+# 5. Твоя стандартная команда запуска
 CMD composer install && php-fpm
