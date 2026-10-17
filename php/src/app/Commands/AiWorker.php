@@ -13,29 +13,24 @@ class AiWorker extends BaseCommand
 {
     protected $group       = 'AI';
     protected $name        = 'ai:worker';
-    protected $description = 'Простой линейный воркер для генерации тестов с источниками';
+    protected $description = 'Промышленный воркер с автоматическим циклом самокоррекции ИИ (до 3 попыток)';
 
     public function run(array $params)
     {
-        // Отключаем ограничение времени выполнения скрипта для CLI
         set_time_limit(0);
+        CLI::write("Запуск ИИ-воркера с самокоррекцией...", "green");
 
-        CLI::write("Запуск ИИ-воркера...", "green");
-
-        // 1. Инициализируем всё один раз на самом верху
         $db           = \Config\Database::connect();
         $ollama       = new OllamaClient();
         $materialRepo = new MaterialRepository();
         $fewShotRepo  = new FewShotRepository();
 
-        // 2. Подключаемся к RabbitMQ
         $connection = new AMQPStreamConnection('rabbitmq', 5672, 'guest', 'guest');
         $channel = $connection->channel();
         $channel->queue_declare('test_generation_tasks', false, true, false, false);
 
         CLI::write("Воркер активен и слушает очередь...", "yellow");
 
-        // 3. Главный бесконечный цикл
         while (true) {
             $msg = $channel->basic_get('test_generation_tasks');
 
@@ -44,48 +39,48 @@ class AiWorker extends BaseCommand
                 continue;
             }
 
-            // --- НАЧАЛО ОБРАБОТКИ ЗАДАЧИ ---
             $taskData = json_decode($msg->body, true);
             $taskId   = $taskData['task_id'];
 
             CLI::write("\n=== Найдена задача ID: {$taskId} ===", "blue");
 
-            // Меняем статус в Postgres
             $db->table('generation_tasks')->where('id', $taskId)->update(['status' => 'processing']);
             $task = $db->table('generation_tasks')->where('id', $taskId)->get()->getRowArray();
 
             try {
-                // Шаг 1: Семантический поиск контекста (RAG)
+                // ШАГ 1: Поиск контекста (RAG)
                 CLI::write("Шаг 1: Семантический поиск (RAG)...", "cyan");
                 $themeEmbedding = $ollama->getEmbedding($task['topic']);
-                $contextChunks  = $materialRepo->findNearestChunks($themeEmbedding, (int)$task['profession_id'], 3);
+                $contextChunks = $materialRepo->findNearestChunks($themeEmbedding, (int)$task['profession_id'], 3);
 
                 if (empty($contextChunks)) {
                     throw new \Exception("В базе знаний не найдено материалов по этой теме.");
                 }
 
                 $contextText = "";
-                $sourceDocuments = [];
-
+                $sourceMeta = [];
                 foreach ($contextChunks as $chunk) {
-                    // Формируем для ИИ железную юридическую ссылку на первоисточник
                     $contextText .= "--- НАЧАЛО БЛОКА ДАННЫХ ---\n";
                     $contextText .= "ИСТОЧНИК: " . $chunk['document_title'] . "\n";
-                    $contextText .= "СТРАНИЦА В ДОКУМЕНТЕ: " . $chunk['page_number'] . "\n"; // Передаем страницу ИИ!
+                    $contextText .= "СТРАНИЦА В ДОКУМЕНТЕ: " . $chunk['page_number'] . "\n";
                     $contextText .= "ТЕКСТ МАТЕРИАЛА:\n" . $chunk['text_chunk'] . "\n";
                     $contextText .= "--- КОНЕЦ БЛОКА ДАННЫХ ---\n\n";
 
-                    if (!in_array($chunk['document_title'], $sourceDocuments)) {
-                        $sourceDocuments[] = $chunk['document_title'];
+                    $metaKey = md5($chunk['document_title'] . '_' . $chunk['page_number']);
+                    if (!isset($sourceMeta[$metaKey])) {
+                        $sourceMeta[$metaKey] = [
+                            'chunk_id'       => (int)$chunk['id'],
+                            'document_title' => $chunk['document_title'],
+                            'page_number'    => (int)$chunk['page_number']
+                        ];
                     }
                 }
 
-                $finalSourcesString = implode(', ', $sourceDocuments);
+                $finalSourcesString = implode(', ', array_column($sourceMeta, 'document_title'));
 
-                // Шаг 2: Сбор примеров (Few-Shot)
+                // ШАГ 2: Сбор примеров (Few-Shot)
                 CLI::write("Шаг 2: Сбор Few-Shot эталонов...", "cyan");
                 $fewShots = $fewShotRepo->getRandomExamples((int)$task['profession_id'], $task['type'], 3);
-
                 $fewShotPrompt = "";
                 foreach ($fewShots as $fs) {
                     $fewShotPrompt .= "Вопрос: " . $fs['question'] . "\n";
@@ -93,73 +88,135 @@ class AiWorker extends BaseCommand
                     $fewShotPrompt .= "Правильный ответ: " . json_encode($fs['correct_answer'], JSON_UNESCAPED_UNICODE) . "\n\n";
                 }
 
-                // Шаг 3: Генерация (Актер) с жестким контролем типов
-                CLI::write("Шаг 3: ИИ-Генератор (Qwen2.5:7b)...", "cyan");
-                $actorPrompt = "Ты — профессиональный методист образования. Составь ОДИН точный учебный тест по теме \"{$task['topic']}\" строго на основе предоставленного методического материала.\n\n"
-                    . "МЕТОДИЧЕСКИЙ МАТЕРИАЛ (БАЗА ЗНАНИЙ):\n{$contextText}\n"
-                    . "ПРИМЕРЫ ТЕСТОВ (ДЛЯ ИЗУЧЕНИЯ СТРУКТУРЫ):\n{$fewShotPrompt}\n\n"
-                    . "ЖЕСТКОЕ ТРЕБОВАНИЕ К ТИПУ ТЕСТА:\n"
-                    . "Ты обязан составить тест типа \"{$task['type']}\".\n"
-                    . "- Если тип \"single\": в массиве \"correct\" должен быть строго ОДИН правильный вариант ответа.\n"
-                    . "- Если тип \"multi\": в массиве \"correct\" должно быть СТРОГО ДВА ИЛИ ТРИ правильных варианта ответа. Сформулируй вопрос так, чтобы он требовал выбора нескольких признаков, этапов или характеристик (например: 'Выберите два/три правильных варианта...').\n\n"
-                    . "ТРЕБОВАНИЕ К ПОЛЮ 'RATIONALE':\n"
-                    . "Напиши подробное обоснование, почему выбранные ответы верны, с обязательным указанием СТРАНИЦЫ методички, которую ты прочитал.\n\n"
-                    . "ОТВЕТЬ СТРОГО JSON-ОБЪЕКТОМ (без markdown разметки):\n"
-                    . "{\n  \"question\": \"Текст вопроса\",\n  \"options\": [\"Вариант 1\", \"Вариант 2\", \"Вариант 3\", \"Вариант 4\", \"Вариант 5\"],\n  \"correct\": [\"Правильный 1\", \"Правильный 2\"],\n  \"rationale\": \"Обоснование правильности со ссылкой на страницу методички\"\n}";
+                // =================================================================
+                // 🔄 ЗАПУСКАЕМ ЦИКЛ САМОКОРРЕКЦИИ ИИ (ДО 3 ПОПЫТОК)
+                // =================================================================
+                $maxAttempts = 3;
+                $attempt = 1;
+                $isValid = false;
+                $finalJson = "";
+                $aiFeedbackMessage = ""; // Сюда пишем ругань для ИИ, если он ошибся
 
-                $generatedJson = $ollama->generateChat([['role' => 'user', 'content' => $actorPrompt]], true);
+                while ($attempt <= $maxAttempts && !$isValid) {
+                    CLI::write("Попытка генерации {$attempt} из {$maxAttempts}...", "yellow");
 
-                // Шаг 4: Проверка (Критик) — теперь он следит за количеством ответов
-                CLI::write("Шаг 4: ИИ-Критик...", "cyan");
-                $criticPrompt = "Ты — строгий инспектор качества образования. Проверь созданный тест на основе официальной методички.\n"
-                    . "ОФИЦИАЛЬНАЯ МЕТОДИЧКА:\n{$contextText}\n"
-                    . "ТЕСТ ДЛЯ ПРОВЕРКИ:\n{$generatedJson}\n\n"
-                    . "ПРАВИЛА ИНСПЕКЦИИ:\n"
-                    . "1. Проверь факты и обоснование по методичке.\n"
-                    . "2. ТРЕБОВАНИЕ К ТИПУ ТЕСТА: Тест должен быть типа \"{$task['type']}\".\n"
-                    . "   - Если тип \"single\", а правильных ответов больше одного — переделай тест.\n"
-                    . "   - Если тип \"multi\", а в массиве \"correct\" указан всего ОДИН вариант — ты ОБЯЗАН полностью переписать вопрос и варианты ответов, чтобы правильных вариантов стало ДВА или ТРИ, вытащив дополнительные факты из методички!\n\n"
-                    . "ОТВЕТЬ СТРОГО JSON-ОБЪЕКТОМ:";
+                    // ШАГ 3: Генератор (Актер) — Полный запрет на числовой шум
+                    CLI::write("Шаг 3: Запрос к ИИ-Генератору (Актер)...", "cyan");
+                    $actorPrompt = "Ты — профессиональный методист образования. Составь ОДИН точный учебный тест по теме \"{$task['topic']}\" строго на основе предоставленного методического материала.\n\n"
+                        . "МЕТОДИЧЕСКИЙ МАТЕРИАЛ (БАЗА ЗНАНИЙ):\n{$contextText}\n"
+                        . "ПРИМЕРЫ ТЕСТОВ:\n{$fewShotPrompt}\n\n"
+                        . "КРИТИЧЕСКИЕ ПРАВИЛА ДЛЯ НЕПРАВИЛЬНЫХ ВАРИАНТОВ (OPTIONS):\n"
+                        . "1. Напиши строго 5 вариантов в 'options'.\n"
+                        . "2. ЖЕСТКИЙ ЗАПРЕТ НА ЧИСЛА: Если правильный ответ содержит цифры или время (например, '60-90 минут'), тебе КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО придумывать другие числа в качестве неправильных вариантов (нельзя писать '50 минут', '120 минут' и т.д.). ИИ путается в математике!\n"
+                        . "3. Вместо чисел делай неправильные варианты СТРОГО ТЕКСТОВЫМИ ДЕЙСТВИЯМИ из совсем других процедур бьюти-сферы (например: 'Нанесение парафиновой маски', 'Срезание кутикулы кусачками', 'Применение размягчителя'). Это сделает тест на 100% честным.\n\n"
+                        . "ЖЕСТКОЕ ТРЕБОВАНИЕ К ТИПУ ТЕСТА:\n"
+                        . "Ты обязан составить тест типа \"{$task['type']}\" (single — 1 ответ, multi — 2 или 3 ответа).\n\n"
+                        . $aiFeedbackMessage
+                        . "ОТВЕТЬ СТРОГО JSON-ОБЪЕКТОМ:\n"
+                        . "{\n  \"question\": \"Текст вопроса\",\n  \"options\": [\"Вариант 1\", \"Вариант 2\", \"Вариант 3\", \"Вариант 4\", \"Вариант 5\"],\n  \"correct\": [\"Правильный\"],\n  \"rationale\": \"Обоснование со ссылкой на конкретную страницу\"\n}";
 
-                $finalJson = $ollama->generateChat([['role' => 'user', 'content' => $criticPrompt]], true);
+                    $generatedJson = $ollama->generateChat([['role' => 'user', 'content' => $actorPrompt]], true);
 
-                // Валидируем финальный JSON от Критика
-                $testArray = json_decode($finalJson, true);
-                if (json_last_error() !== JSON_ERROR_NONE) {
-                    throw new \Exception("ИИ вернул сломанную JSON структуру: " . $finalJson);
+                    // --- АВТОМАТИЧЕСКИЙ ФИКС ДУБЛИКАТОВ СТРОК ДЛЯ СЛАБЫХ МОДЕЛЕЙ ---
+                    $rawActorArray = json_decode($generatedJson, true);
+                    if (json_last_error() === JSON_ERROR_NONE && isset($rawActorArray['options'])) {
+                        // Жестко удаляем повторяющиеся строки, которые ИИ скопировал дважды
+                        $rawActorArray['options'] = array_values(array_unique($rawActorArray['options']));
+                        $generatedJson = json_encode($rawActorArray, JSON_UNESCAPED_UNICODE);
+                    }
+                    // ---------------------------------------------------------------
+
+                    // ШАГ 4: Аудитор — Вправляем мозги в оценке математики
+                    CLI::write("Шаг 4: Передача черновика Независимому ИИ-Аудитору...", "cyan");
+                    $criticPrompt = "Ты — независимый эксперт-аудитор. Проверь созданный тест на наличие смыслового обмана, синонимов и логических ошибок.\n\n"
+                        . "ОФИЦИАЛЬНАЯ МЕТОДИЧКА:\n{$contextText}\n"
+                        . "ТЕСТ ДЛЯ ПРОВЕРКИ:\n{$generatedJson}\n\n"
+                        . "ПРАВИЛА ИСПЫТАНИЯ ДЛЯ АУДИТОРА:\n"
+                        . "1. Проверь варианты в 'options', которые НЕ попали в 'correct'. Среди них не должно быть синонимов правильных ответов.\n"
+                        . "2. ВНИМАНИЕ: Разные числа и временные интервалы (например, '60-90 минут' и '120 минут') КАТЕГОРИЧЕСКИ НЕ ЯВЛЯЮТСЯ СИНОНИМАМИ! Это разные значения. Если в тесте указаны разные числа — это НЕ ошибка, пропускай такой тест!\n"
+                        . "3. Убедись, что тип теста соответствует \"{$task['type']}\" (в single — 1 ответ, в multi — 2 или 3 ответа).\n\n"
+                        . "ФОРМАТ ОТВЕТА СТРОГО JSON:\n"
+                        . "{\n  \"valid\": true/false,\n  \"error_reason\": \"Причина забраковки\"\n}";
+
+                    $auditorJson = $ollama->generateChat([['role' => 'user', 'content' => $criticPrompt]], true);
+                    $auditResult = json_decode($auditorJson, true);
+
+                    // Разбираем вердикт Судьи
+                    $isAuditPassed = isset($auditResult['valid']) && ($auditResult['valid'] === true || $auditResult['valid'] === "true");
+
+                    if (!$isAuditPassed) {
+                        $reason = $auditResult['error_reason'] ?? 'Неизвестная логическая ошибка в дистракторах';
+                        CLI::write("❌ Независимый Аудитор ЗАБРАКОВАЛ тест! Причина: {$reason}", "red");
+
+                        // Формируем жесткий фидбек для Актера на следующий круг
+                        $aiFeedbackMessage = "⚠️ ТВОЙ ПРОШЛЫЙ ВАРИАНТ БЫЛ ОТКЛОНЕН АУДИТОРОМ! Ошибка: {$reason}. Напиши тест заново. Сделай ложные варианты (options) очевидно ложными, не используй синонимы и не суй туда верные факты из текста!\n";
+                        $attempt++;
+                        continue;
+                    }
+
+                    // Если Аудитор дал добро, парсим чистый JSON Актера
+                    $testArray = json_decode($generatedJson, true);
+                    if (json_last_error() !== JSON_ERROR_NONE) {
+                        $aiFeedbackMessage = "⚠️ ОШИБКА: Сломан синтаксис JSON.\n";
+                        $attempt++;
+                        continue;
+                    }
+
+                    // Выходим из цикла — тест успешно прошел ИИ-госприёмку!
+                    $isValid = true;
+
                 }
 
-                // Вытаскиваем обоснование ИИ
+                // ЕСЛИ ЗА 3 ПОПЫТКИ ИИ ТАК И НЕ СПРАВИЛСЯ С ЛОГИКОЙ
+                if (!$isValid) {
+                    throw new \Exception("ИИ не смог сгенерировать валидный тест за {$maxAttempts} попыток. Робот саботирует требования к структуре.");
+                }
+
+                // =================================================================
+                // СВЕРХТОЧНАЯ ОЧИСТКА И ФОРМАТИРОВАНИЕ ВОПРОСА ЧЕРЕЗ REGEX
+                // =================================================================
+
+                // Удаляем любые упоминания количества вариантов (выберите один/два/три/несколько/правильных/вариантов/ответа)
+                // Регулярка не зависит от регистра букв, наличия точек, запятых или пробелов
+                $pattern = '/выберите\s+(один|два|три|четыре|несколько)\s+(правильных\s+)?(варианта|вариантов|ответа)?\s*(ответа)?[\.\!\?\s]*/iu';
+                $testArray['question'] = preg_replace($pattern, '', $testArray['question']);
+
+                // Убираем случайные остатки знаков препинания или двоеточий в самом начале, если они остались после вырезания
+                $testArray['question'] = ltrim(trim($testArray['question']), ':. ,-');
+
+                // Принудительно подставляем наш чистый, универсальный маркер в начало
+                if ($task['type'] === 'single') {
+                    $testArray['question'] = "Выберите один правильный вариант ответа. " . $testArray['question'];
+                } else {
+                    $testArray['question'] = "Выберите несколько правильных вариантов ответа. " . $testArray['question'];
+                }
+
+                // Финальная очистка текста от двойных пробелов
+                $testArray['question'] = preg_replace('/\s+/', ' ', trim($testArray['question']));
+                // =================================================================
+
+
                 $aiRationale = $testArray['rationale'] ?? 'Обоснование не предоставлено ИИ.';
-
-                // Принудительно склеиваем обоснование ИИ с именами документов из БД
-                $finalRationaleWithSources = $aiRationale . "<br><br>📌 <b>Официальный источник данных:</b> " . $finalSourcesString;
-
-                // Обновляем структуру массива
-                $testArray['rationale'] = $finalRationaleWithSources;
+                $testArray['sources'] = array_values($sourceMeta);
                 $finalJsonUpdated = json_encode($testArray, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
 
-                // Сохраняем готовый результат в Postgres
+                // Сохраняем в Postgres
                 $db->table('generation_tasks')->where('id', $taskId)->update([
                     'status'        => 'done',
                     'result_json'   => $finalJsonUpdated,
-                    'rationale'     => $finalRationaleWithSources,
+                    'rationale'     => $aiRationale,
                     'error_message' => null,
                     'updated_at'    => date('Y-m-d H:i:s')
                 ]);
-
-                CLI::write("=== Успех! Задача #{$taskId} выполнена с источником ===", "green");
-
+                CLI::write("=== УСПЕХ! Тест успешно сгенерирован и прошел валидацию ===", "green");
             } catch (\Exception $e) {
-                CLI::write("Ошибка: " . $e->getMessage(), "red");
+                CLI::write("Глобальная ошибка задачи: " . $e->getMessage(), "red");
                 $db->table('generation_tasks')->where('id', $taskId)->update([
                     'status'        => 'failed',
                     'error_message' => $e->getMessage(),
                     'updated_at'    => date('Y-m-d H:i:s')
                 ]);
             }
-
-            // Подтверждаем RabbitMQ, что сообщение обработано
             $channel->basic_ack($msg->delivery_info['delivery_tag']);
         }
     }

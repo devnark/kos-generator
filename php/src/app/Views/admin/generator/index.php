@@ -166,19 +166,18 @@
                 if (data.status === 'done') {
                     let test = data.result;
 
-                    // --- ГАРАНТИЯ СТАБИЛЬНОСТИ: Проверяем структуру объекта от ИИ ---
-                    let question = test.question || 'Вопрос не сгенерирован';
-                    let options  = Array.isArray(test.options) ? test.options : [];
-                    let correct  = Array.isArray(test.correct) ? test.correct : [];
+                    // Безопасное извлечение ключей из JSON от ИИ
+                    let question  = test.question || 'Вопрос не сгенерирован';
+                    let options   = Array.isArray(test.options) ? test.options : [];
+                    let correct   = Array.isArray(test.correct) ? test.correct : [];
                     let rationale = test.rationale || 'Обоснование отсутствует в ответе ИИ.';
 
-                    // 1. Формируем HTML-вид вопроса
+                    // 1. Формируем HTML-вид вопроса и ответов
                     let html = '<h4 class="mb-3 text-dark">' + question + '</h4>';
 
                     if (options.length > 0) {
                         html += '<div class="list-group mb-4 shadow-sm">';
                         options.forEach(function(opt) {
-                            // Проверяем, является ли этот вариант правильным
                             let isCorrect = correct.includes(opt);
                             let activeClass = isCorrect ? 'list-group-item-success fw-bold' : 'bg-white';
                             let icon = isCorrect ? '<i class="bi bi-check-circle-fill text-success me-2"></i>' : '<i class="bi bi-circle me-2 text-muted"></i>';
@@ -190,33 +189,80 @@
                         html += '<div class="alert alert-warning">ИИ не сгенерировал варианты ответов.</div>';
                     }
 
-                    // 2. Добавляем блок обоснования
+                    // 2. ВЁРСТКА: Разделяем чистый текст обоснования и строку источника
+                    let mainRationale = rationale;
+                    let documentSource = '';
+
+                    if (rationale.indexOf('Официальный источник данных:') !== -1) {
+                        let parts = rationale.split('Официальный источник данных:');
+                        mainRationale = parts[0].trim();
+                        documentSource = parts[1].trim();
+                    }
+
+                    // Строим карточку обоснования
+                    // 2. ВЁРСТКА: Выводим чистое обоснование ИИ
                     html += '<div class="card border-info bg-white shadow-sm mb-3">';
                     html += '  <div class="card-header bg-info text-white fw-bold"><i class="bi bi-info-square me-2"></i>Основание верности ответа (Контекст методички):</div>';
                     html += '  <div class="card-body text-secondary" style="font-size: 15px; line-height: 1.6;">' + rationale + '</div>';
-                    html += '</div>';
 
-                    // 3. Безопасно вставляем данные в контейнеры
+                    // Рендерим источники из отдельного массива метаданных, если они есть
+                    if (Array.isArray(test.sources) && test.sources.length > 0) {
+                        html += '  <div class="card-footer bg-light border-top" style="font-size: 14px;">';
+                        html += '    <div class="fw-bold text-muted mb-2"><i class="bi bi-bookmark-check-fill text-success me-1"></i> Использованные первоисточники из базы знаний:</div>';
+                        html += '    <div class="d-flex flex-wrap gap-2">';
+
+                        // --- УМНАЯ ГРУППИРОВКА НА ФРОНТЕНДЕ ---
+                        let groupedSources = {};
+
+                        test.sources.forEach(function(source) {
+                            // Ключ группировки — имя файла + страница
+                            let key = source.document_title + '_page_' + source.page_number;
+
+                            if (!groupedSources[key]) {
+                                groupedSources[key] = {
+                                    document_title: source.document_title,
+                                    page_number: source.page_number,
+                                    chunk_ids: [source.chunk_id] // Собираем ID в массив
+                                };
+                            } else {
+                                // Если страница уже есть, просто дописываем ID чанка в этот же блок
+                                if (!groupedSources[key].chunk_ids.includes(source.chunk_id)) {
+                                    groupedSources[key].chunk_ids.push(source.chunk_id);
+                                }
+                            }
+                        });
+
+                        // Рендерим сгруппированные данные
+                        Object.values(groupedSources).forEach(function(source) {
+                            html += '<span class="badge bg-white text-dark border shadow-sm p-2 d-flex align-items-center" title="ID чанков в базе: ' + source.chunk_ids.join(', ') + '">';
+                            html += '  <i class="bi bi-file-earmark-pdf text-danger me-1"></i> ' + source.document_title;
+                            html += '  <span class="badge bg-secondary ms-2">стр. ' + source.page_number + '</span>';
+                            html += '</span>';
+                        });
+
+                        html += '    </div>';
+                        html += '  </div>';
+                    }
+
+                    // 3. Заполняем контейнеры на странице данными
                     $('#testVisualPreview').html(html);
                     $('#jsonViewer').text(JSON.stringify(test, null, 4));
 
-                    // 4. Открываем окно
+                    // 4. Открываем модальное окно Bootstrap 5
                     let myModal = new bootstrap.Modal(document.getElementById('jsonModal'));
                     myModal.show();
                 }
             });
         });
 
-        // AJAX Опросник: Каждые 3 секунды проверяем статус задач
+        // AJAX Опросник: Каждые 3 секунды проверяем статус задач в Postgres
         setInterval(function() {
             $('tr[id^="task-row-"]').each(function() {
                 let row = $(this);
                 let taskId = row.attr('id').replace('task-row-', '');
                 let statusBadge = row.find('.status-cell span');
 
-                // Проверяем задачи, которые еще не завершились на экране
                 if (statusBadge.hasClass('bg-warning') || statusBadge.hasClass('bg-info') || statusBadge.text().includes('очереди')) {
-                    // Заменили путь на явный через base_url()
                     $.getJSON('<?= base_url("admin/generator/status") ?>/' + taskId, function(data) {
                         if (data.status === 'processing') {
                             row.find('.status-cell').html('<span class="badge bg-info text-dark"><i class="bi bi-gear-fill me-1"></i>ИИ думает...</span>');
