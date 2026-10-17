@@ -197,10 +197,31 @@ class AiWorker extends BaseCommand
 
 
                 $aiRationale = $testArray['rationale'] ?? 'Обоснование не предоставлено ИИ.';
-                $testArray['sources'] = array_values($sourceMeta);
+
+                // --- УМНАЯ СВЕРКА ИСТОЧНИКОВ С ТЕКСТОМ RATIONALE (СТРОГИЙ REGEX) ---
+                $filteredSources = [];
+                foreach ($sourceMeta as $meta) {
+                    $pageMarker = (int)$meta['page_number'];
+
+                    // Регулярка \b гарантирует, что мы ищем изолированное число.
+                    // Число 4 внутри слова "40" больше не сработает!
+                    $pattern = '/\b' . $pageMarker . '\b/u';
+
+                    if (preg_match($pattern, $aiRationale)) {
+                        $filteredSources[] = $meta;
+                    }
+                }
+
+                if (empty($filteredSources)) {
+                    $testArray['sources'] = array_values($sourceMeta);
+                } else {
+                    $testArray['sources'] = $filteredSources;
+                }
+                // -----------------------------------------------------------------
+
                 $finalJsonUpdated = json_encode($testArray, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
 
-                // Сохраняем в Postgres
+                // Сохраняем чистый результат в Postgres
                 $db->table('generation_tasks')->where('id', $taskId)->update([
                     'status'        => 'done',
                     'result_json'   => $finalJsonUpdated,
@@ -208,6 +229,7 @@ class AiWorker extends BaseCommand
                     'error_message' => null,
                     'updated_at'    => date('Y-m-d H:i:s')
                 ]);
+
                 CLI::write("=== УСПЕХ! Тест успешно сгенерирован и прошел валидацию ===", "green");
             } catch (\Exception $e) {
                 CLI::write("Глобальная ошибка задачи: " . $e->getMessage(), "red");
