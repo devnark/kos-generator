@@ -42,54 +42,60 @@ class Materials extends BaseController
 
     public function uploadFile()
     {
+        set_time_limit(0);
         $professionId = $this->request->getPost('profession_id');
         $file = $this->request->getFile('schema_file');
+        $documentTitle = trim($this->request->getPost('document_title') ?? '');
 
         if (!$file->isValid() || $file->getExtension() !== 'pdf') {
             return redirect()->to('/admin/materials')->with('error', 'Пожалуйста, загрузите корректный файл в формате PDF.');
         }
 
+        if (empty($documentTitle)) {
+            $documentTitle = $file->getClientName();
+        }
+
         try {
             $pdfPath = $file->getTempName();
 
-            // 1. Извлекаем обычный текст
+            // Инициализируем парсер
             $parser = new \Smalot\PdfParser\Parser();
             $pdf = $parser->parseFile($pdfPath);
-            $ordinaryText = $pdf->getText();
 
-            // 2. АВТОМАТИЗАЦИЯ: Вызываем Python-скрипт для поиска и форматирования таблиц
-            $pythonScript = APPPATH . 'Libraries/table_parser.py';
-            // Выполняем команду внутри контейнера Linux
-            $command = "python3 " . escapeshellarg($pythonScript) . " " . escapeshellarg($pdfPath);
-            $tablesText = shell_exec($command);
-
-            // 3. Склеиваем обычный текст и идеально отформатированные таблицы вместе
-            $fullContent = $ordinaryText . "\n\n" . $tablesText;
-
-            if (empty(trim($fullContent))) {
-                return redirect()->to('/admin/materials')->with('error', 'Не удалось извлечь данные из PDF.');
-            }
-
-            // 4. Нарезаем склеенный текст на чанки и отправляем в Ollama
+            // Получаем ВСЕ страницы документа по отдельности
+            $pages = $pdf->getPages();
             $splitter = new \App\Libraries\TextSplitter();
-            $chunks = $splitter->splitText($fullContent, 1200, 200);
-
             $savedCount = 0;
-            foreach ($chunks as $chunkText) {
-                $embedding = $this->ollamaClient->getEmbedding($chunkText);
-                if (!empty($embedding)) {
-                    $this->materialRepo->saveChunk((int)$professionId, $chunkText, $embedding);
-                    $savedCount++;
+
+            // Перебираем страницы циклично. Переменная $pageNum — это реальная страница в книге!
+            foreach ($pages as $index => $page) {
+                $pageNum = $index + 1; // Страницы нумеруются с 1
+                $pageText = $page->getText();
+
+                if (empty(trim($pageText))) {
+                    continue; // Пропускаем пустые страницы
+                }
+
+                // Нарезаем текст ТЕКУЩЕЙ СТРАНИЦЫ на чанки
+                $chunks = $splitter->splitText($pageText, 1200, 150);
+
+                foreach ($chunks as $chunkText) {
+                    // Генерируем эмбеддинг для чанка
+                    $embedding = $this->ollamaClient->getEmbedding($chunkText);
+
+                    if (!empty($embedding)) {
+                        // Сохраняем в базу, передавая РЕАЛЬНЫЙ номер страницы $pageNum
+                        $this->materialRepo->saveChunk((int)$professionId, $chunkText, $embedding, $documentTitle, $pageNum);
+                        $savedCount++;
+                    }
                 }
             }
 
-            return redirect()->to('/admin/materials')->with(
-                'success',
-                "Документ успешно обработан! Обычный текст извлечен, таблицы автоматически переведены в Markdown-формат. Создано чанков: {$savedCount}."
-            );
+            return redirect()->to('/admin/materials')->with('success', "Документ успешно проиндексирован постранично! Создано чанков с точной адресацией: {$savedCount}.");
 
         } catch (\Exception $e) {
             return redirect()->to('/admin/materials')->with('error', 'Ошибка при обработке PDF: ' . $e->getMessage());
         }
     }
+
 }
