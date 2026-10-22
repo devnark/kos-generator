@@ -18,6 +18,39 @@ class AiWorker extends BaseCommand
 
     public function run(array $params)
     {
+        /*
+// 1. Достаем идеальный структурированный кусок текста из БД
+$chunk = $this->materialRepo->getParentChunkById($selectedParentChunkId);
+
+// 2. Формируем задачу для генерации вопросов по этой теме
+$testTask = [
+    'parent_chunk_id' => $chunk['id'],
+    'topic'           => $chunk['test_topic'],
+    'complexity'      => $chunk['complexity'],
+    'text'            => $chunk['full_text'] // Здесь лежит Markdown-текст с шапкой таблицы!
+];
+
+// 3. Публикуем в вашу исходную очередь test_generation_tasks
+$channel->basic_publish(new AMQPMessage(json_encode($testTask)), '', 'test_generation_tasks');
+
+        $prompt = "Ты — строгий экзаменатор. Твоя задача — составить учебный тест по теме: '{$task['topic']}'.\n"
+        . "Уровень сложности: {$task['complexity']}.\n"
+        . "Используй для составления вопросов ТОЛЬКО следующий текст стандарта:\n"
+        . "--- НАЧАЛО ТЕКСТА ---\n{$task['text']}\n--- КОНЕЦ ТЕКСТА ---\n\n"
+        . "Сгенерируй 3 вопроса. Ответ должен быть строго в формате JSON (массив объектов) без вводных слов:\n"
+        . "[\n"
+        . "  {\n"
+        . "    \"question\": \"Текст вопроса по ГОСТу?\",\n"
+        . "    \"options\": [\"Вариант A\", \"Вариант B\", \"Вариант C\", \"Вариант D\"],\n"
+        . "    \"correct\": \"Вариант B\"\n"
+        . "  }\n"
+        . "]\n";
+
+$aiResponse = $ollama->generate($prompt);
+// Декодируйте JSON и сохраняйте готовый тест в вашу базу данных для студентов!
+
+         */
+
         set_time_limit(0);
         CLI::write("Запуск ИИ-воркера с самокоррекцией...", "green");
 

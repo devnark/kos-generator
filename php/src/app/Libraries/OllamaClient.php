@@ -68,6 +68,56 @@ class OllamaClient
     }
 
 
+    public function generate(string $prompt, string $aiConfigKey = self::AI_CONFIG_LOCAL): string
+    {
+        try {
+            $aiConfig = $this->aiConfig[$aiConfigKey];
+
+            // Обычно эндпоинт генерации в Ollama — это '/api/generate'
+            // Если в вашем массиве $aiConfig['generate'] уже лежит этот путь, то склеится корректно.
+            // Если нет, вы можете заменить на: $aiConfig['host'] . '/api/generate'
+            $url = $aiConfig['host'] . ($aiConfig['generate'] ?? '/api/generate');
+
+            $ch = curl_init($url);
+
+            $payload = [
+                'model'  => $aiConfig['model'] ?? 'qwen2.5:7b', // Ваша основная текстовая модель
+                'prompt' => $prompt,
+                'stream' => false // Важно! Выключаем потоковую передачу, чтобы Ollama вернула весь текст одним ответом
+            ];
+
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST           => true,
+                CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
+                CURLOPT_TIMEOUT        => 60, // Для генерации текста таймаут нужен больше, чем для эмбеддингов (ставим 60 сек)
+                CURLOPT_HTTPHEADER     => ['Content-Type: application/json']
+            ]);
+
+            $response = curl_exec($ch);
+
+            // Проверяем на ошибки cURL (например, таймаут или недоступность хоста)
+            if (curl_errno($ch)) {
+                $errorMsg = curl_error($ch);
+                curl_close($ch);
+                throw new \Exception("cURL Error: " . $errorMsg);
+            }
+
+            curl_close($ch);
+
+            $data = json_decode($response, true);
+
+            // Ollama на эндпоинт /api/generate возвращает текст в ключе 'response'
+            return $data['response'] ?? '';
+
+        } catch (\Exception $e) {
+            log_message('error', 'Ollama Local Generate Error: ' . $e->getMessage());
+            return ''; // Возвращаем пустую строку в случае падения, чтобы не вешать весь скрипт
+        }
+    }
+
+
+
     public function getQuestions(array $messages, string $aiConfigKey = self::AI_CONFIG_LOCAL, bool $jsonMode = true): array
     {
         $data = $this->generateChat($messages, $aiConfigKey, $jsonMode);
