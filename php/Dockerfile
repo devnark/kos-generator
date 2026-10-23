@@ -1,6 +1,6 @@
 FROM php:8.2-fpm
 
-# 1. Системные зависимости + утилиты для Composer + Python для таблиц
+# 1. Системные зависимости + утилиты для Composer + Python для таблиц + pdftotext
 RUN apt-get update && apt-get install -y \
     libicu-dev \
     libpq-dev \
@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     git \
     python3 \
     python3-pip \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Устанавливаем библиотеку pdfplumber для автоматического парсинга таблиц

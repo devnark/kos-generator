@@ -7,9 +7,7 @@ services:
       - "80:80"
     volumes:
       - ./php/src:/usr/local/apache2/htdocs
-      # Подключаем только файл конфигурации виртуального хоста
       - ./apache/generator.local.conf:/usr/local/apache2/conf/extra/httpd-vhosts.conf
-    # Включаем прокси-модули и загружаем наш конфиг при старте
     command: >
       httpd -D FOREGROUND
       -c "LoadModule proxy_module modules/mod_proxy.so"
@@ -21,19 +19,41 @@ services:
     depends_on:
       - php
 
-  # PHP-FPM для обработки скриптов (теперь собирается через Dockerfile)
+  # PHP-FPM контейнер
   php:
     build:
       context: ./php
       dockerfile: Dockerfile
     container_name: generator_php
+    tty: true          # Позволяет контейнеру оставаться запущенным
+    stdin_open: true   # Открывает стандартный поток ввода
     volumes:
       - ./php/src:/usr/local/apache2/htdocs
+      - shared-pdf-data:/tmp/pdf_exchange
     networks:
       - generator-network
     depends_on:
       - postgres
       - rabbitmq
+
+  # Воркер для Tabula
+  tabula_worker:
+    build:
+      context: ./tabula_worker
+      dockerfile: Dockerfile
+    container_name: generator_tabula_worker
+    tty: true
+    stdin_open: true
+    volumes:
+      - shared-pdf-data:/tmp/pdf_exchange
+      - ./php/src:/usr/local/apache2/htdocs
+      # НАШЕ ИСПРАВЛЕНИЕ: прокидываем скачанный jar с компьютера напрямую в контейнер
+      - ./tabula_bin/tabula.jar:/opt/tabula_worker/bin/tabula.jar
+    networks:
+      - generator-network
+    depends_on:
+      - rabbitmq
+      - php
 
   # PostgreSQL с расширением pgvector
   postgres:
@@ -62,6 +82,8 @@ services:
 
 volumes:
   pgdata:
+  # Объявляем именованный volume для обмена тяжелыми файлами между PHP и Tabula
+  shared-pdf-data:
 
 networks:
   generator-network:
