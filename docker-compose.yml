@@ -47,8 +47,6 @@ services:
     volumes:
       - shared-pdf-data:/tmp/pdf_exchange
       - ./php/src:/usr/local/apache2/htdocs
-      # НАШЕ ИСПРАВЛЕНИЕ: прокидываем скачанный jar с компьютера напрямую в контейнер
-      - ./tabula_bin/tabula.jar:/opt/tabula_worker/bin/tabula.jar
     networks:
       - generator-network
     depends_on:
