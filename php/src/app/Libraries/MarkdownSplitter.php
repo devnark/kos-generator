@@ -97,44 +97,68 @@ class MarkdownSplitter
 
 
     /**
-     * Нарезает родительский чанк на мелкие дочерние чанки строго по предложениям
+     * Нарезает родительский чанк на мелкие дочерние чанки по строкам/предложениям,
+     * предотвращая разрыв Markdown-структур (таблиц, списков).
      */
     public function splitIntoChildren(string $text, int $maxChildLength = 600, int $overlap = 150): array
     {
-        // Разбиваем текст родителя на предложения
-        $sentences = preg_split('/(?<=[.!?])\s+/', $text);
+        // 1. Сначала аккуратно бьем текст по переносам строк (сохраняя структуру табличных строк)
+        $lines = preg_split('/\r\n|\r|\n/', $text);
+        $atomicPieces = [];
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line)) continue;
+
+            // Если строка текстовая (не часть таблицы) и длинная, дорасщепляем её по предложениям
+            if (strpos($line, '|') === false && mb_strlen($line) > 100) {
+                $sentences = preg_split('/(?<=[.!?])\s+/', $line);
+                foreach ($sentences as $sentence) {
+                    $sentence = trim($sentence);
+                    if (!empty($sentence)) {
+                        $atomicPieces[] = $sentence;
+                    }
+                }
+            } else {
+                // Строки таблиц или короткие элементы списков оставляем монолитными атомарными элементами
+                $atomicPieces[] = $line;
+            }
+        }
+
         $chunks = [];
-
         $currentChild = "";
-        $history = []; // Очередь предложений для формирования оверлапа (перекрытия)
+        $history = []; // Очередь атомарных элементов для оверлапа
 
-        foreach ($sentences as $sentence) {
-            $sentence = trim($sentence);
-            if (empty($sentence)) continue;
+        // 2. Скользящее окно для сборки чанков
+        foreach ($atomicPieces as $piece) {
+            // Проверяем длину в mb_strlen (корректно для кириллицы UTF-8)
+            $potentialLength = mb_strlen($currentChild . (empty($currentChild) ? "" : "\n") . $piece);
 
-            // Если добавление предложения взрывает лимит дочернего чанка
-            if (strlen($currentChild . " " . $sentence) > $maxChildLength && !empty($currentChild)) {
+            if ($potentialLength > $maxChildLength && !empty($currentChild)) {
                 $chunks[] = trim($currentChild);
 
-                // Формируем оверлап: собираем последние предложения из истории, пока они укладываются в лимит overlap
+                // Формируем оверлап из предыдущих элементов истории
                 $overlapText = "";
                 $revHistory = array_reverse($history);
-                $overlapSentences = [];
+                $overlapPieces = [];
 
-                foreach ($revHistory as $hSent) {
-                    if (strlen($hSent . " " . $overlapText) < $overlap) {
-                        array_unshift($overlapSentences, $hSent);
-                        $overlapText = implode(" ", $overlapSentences);
+                foreach ($revHistory as $hPiece) {
+                    if (mb_strlen($hPiece . (empty($overlapText) ? "" : "\n") . $overlapText) < $overlap) {
+                        array_unshift($overlapPieces, $hPiece);
+                        $overlapText = implode("\n", $overlapPieces);
                     } else {
                         break;
                     }
                 }
 
-                $currentChild = $overlapText . (empty($overlapText) ? "" : " ") . $sentence;
-                $history = array_merge($overlapSentences, [$sentence]);
+                // Накатываем новый чанк, сохраняя перенос строки для табличной структуры
+                $currentChild = $overlapText . (empty($overlapText) ? "" : "\n") . $piece;
+                $history = array_merge($overlapPieces, [$piece]);
             } else {
-                $currentChild .= (empty($currentChild) ? "" : " ") . $sentence;
-                $history[] = $sentence;
+                // Для таблиц лучше склеивать через перевод строки \n, а не через пробел
+                $glue = (strpos($piece, '|') !== false || empty($currentChild)) ? "\n" : " ";
+                $currentChild .= (empty($currentChild) ? "" : $glue) . $piece;
+                $history[] = $piece;
             }
         }
 
@@ -144,6 +168,63 @@ class MarkdownSplitter
 
         return $chunks;
     }
+
+    /**
+     * Превращает CSV-таблицу любой ширины и длины в массив текстовых абзацев для RAG.
+     * Каждая строка таблицы становится полноценным самостоятельным чанком.
+     */
+    public function convertCsvToRAGChunks(string $csvPath, string $documentTitle, string $sectionName = ''): array
+    {
+        if (!file_exists($csvPath)) return [];
+
+        $chunks = [];
+        $headers = [];
+        $rowCount = 0;
+
+        if (($handle = fopen($csvPath, "r")) !== false) {
+            while (($data = fgetcsv($handle, 0, ",")) !== false) {
+                $rowCount++;
+
+                // Очищаем данные в ячейках от мусора и лишних переносов строк
+                $data = array_map(function($cell) {
+                    return trim(preg_replace('/\s+/', ' ', $cell));
+                }, $data);
+
+                // 1. Первая строка таблицы — это всегда заголовки колонок
+                if ($rowCount === 1) {
+                    $headers = $data;
+                    continue;
+                }
+
+                // Пропускаем пустые строки
+                if (empty(array_filter($data))) continue;
+
+                // 2. Линеаризуем текущую строку таблицы
+                $chunkText = "Документ: {$documentTitle}\n";
+                if (!empty($sectionName)) {
+                    $chunkText .= "Раздел: {$sectionName}\n";
+                }
+
+                $chunkText .= "Данные технологической карты:\n";
+
+                foreach ($data as $index => $value) {
+                    // Берем название колонки (если оно есть), иначе называем "Колонка X"
+                    $columnName = !empty($headers[$index]) ? $headers[$index] : ("Параметр " . ($index + 1));
+
+                    // Если ячейка не пустая, добавляем её в текстовом виде
+                    if ($value !== '' && $value !== '-') {
+                        $chunkText .= "- {$columnName}: {$value}\n";
+                    }
+                }
+
+                $chunks[] = trim($chunkText);
+            }
+            fclose($handle);
+        }
+
+        return $chunks;
+    }
+
 
     /**
      * Конвертирует CSV файл от Tabula в валидную Markdown-таблицу

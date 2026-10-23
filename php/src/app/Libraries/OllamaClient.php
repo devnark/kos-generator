@@ -116,6 +116,25 @@ class OllamaClient
 
 
 
+    /*
+     *  Данные для заполнения вспомогательных таблиц генерации RAG
+     */
+    public function getDataFoRag(array $messages, string $aiConfigKey = self::AI_CONFIG_LOCAL, bool $jsonMode = true): array
+    {
+        $data = $this->generateChat($messages, $aiConfigKey, $jsonMode);
+//        $data = $this->getDataQuest();
+        $arrayData = $this->convertStringJsonToArray($data);
+        if (!empty($arrayData['choices'][0]['message']['content'])){
+            return $arrayData['choices'][0]['message']['content'];
+        }
+
+        // Локально так возвращает
+        if (!empty($arrayData['message']['content'])){
+            return $arrayData['message']['content'];
+        }
+
+        return [];
+    }
     public function getQuestions(array $messages, string $aiConfigKey = self::AI_CONFIG_LOCAL, bool $jsonMode = true): array
     {
         $data = $this->generateChat($messages, $aiConfigKey, $jsonMode);
@@ -151,7 +170,7 @@ class OllamaClient
     }
 
 
-    private function generateChat($messages, string $aiConfigKey = self::AI_CONFIG_LOCAL, bool $jsonMode = true): string
+    private function generateChat(array $messages, string $aiConfigKey = self::AI_CONFIG_LOCAL, bool $jsonMode = true): string
     {
         // 1. Получаем конфигурацию для выбранного ключа
         $aiConfig = $this->aiConfig[$aiConfigKey];

@@ -30,6 +30,10 @@ class MaterialRepository implements MaterialRepositoryInterface
             'document_title' => $data['document_title'],
             'full_text' => $data['full_text'],
             'chunk_summary' => $data['chunk_summary'] ?? null,
+            'test_topic' => $data['test_topic'] ??  '',
+            'is_testable' => $data['is_testable'] ??  false,
+            'complexity' => $data['complexity'] ??  null,
+            'keywords' => $data['keywords'] ??  null,
             'meta_json' => $data['meta_json'] ?? null
         ]);
 

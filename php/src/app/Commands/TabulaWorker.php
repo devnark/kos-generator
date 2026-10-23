@@ -48,36 +48,57 @@ class TabulaWorker extends BaseCommand
 
                 CLI::write("[+] Извлечение таблиц для: {$filename}", 'cyan');
 
-                // 1. Вызов Tabula CLI
+                // 1. Вызов Tabula CLI — получаем CSV
                 $tabulaCmd = "java -jar " . escapeshellarg($jarPath) . " --guess -p all " . escapeshellarg($pdfPath) . " > " . escapeshellarg($csvPath);
                 shell_exec($tabulaCmd);
 
-                // 2. Конвертируем CSV в Markdown через библиотеку
+                // 2. ВМЕСТО Markdown-сетки генерируем плоские RAG-чанки из CSV
                 $splitter = new MarkdownSplitter();
-                $markdownTable = $splitter->convertCsvToMarkdown($csvPath);
+                // Передаем название документа для контекста внутри чанка
+                $tableChunks = $splitter->convertCsvToRAGChunks($csvPath, $data['document_title'] ?? $filename);
+
+                // Удаляем временный CSV
                 if (file_exists($csvPath)) @unlink($csvPath);
 
-                // 3. Извлекаем обычный текст через pdftotext
+// 3. Извлекаем обычный текст через pdftotext
                 $txtPath = $pdfPath . '.txt';
                 shell_exec("pdftotext -layout " . escapeshellarg($pdfPath) . " " . escapeshellarg($txtPath));
 
                 $fullText = "";
                 if (file_exists($txtPath)) {
-                    $fullText = file_get_contents($txtPath);
+                    $lines = file($txtPath);
+                    $cleanLines = [];
+
+                    foreach ($lines as $line) {
+                        // Если в строке есть длинные цепочки пробелов (признак таблицы в -layout),
+                        // мы её пропускаем, так как Tabula вытащит этот контент качественнее
+                        if (preg_match('/\s{4,}/u', $line) && (strpos($line, 'Шаг') !== false || preg_match('/\d+/', $line))) {
+                            continue;
+                        }
+
+                        $cleanLines[] = $line;
+                    }
+
+                    $fullText = implode("", $cleanLines);
+
+                    // Базовая очистка метаданных и страниц
+                    $fullText = str_replace("\x0C", " ", $fullText);
+                    $fullText = preg_replace('/(РФ\s+)?72319-2025\s+"Услуги бытовые\..*?"/ui', '', $fullText);
+                    $fullText = preg_replace("/\n{3,}/", "\n\n", $fullText);
+
                     @unlink($txtPath);
                 }
 
-                // Удаляем исходный PDF из общего volume
-                @unlink($pdfPath);
+                @unlink($pdfPath); // Удаляем исходный PDF
 
-                // 4. Публикуем результат в следующую очередь для обогащения ИИ
-                $data['markdown_table'] = $markdownTable;
-                $data['full_text'] = $fullText;
+                // 4. Передаем структурированные данные в следующую очередь
+                $data['full_text']    = $fullText;     // Обычный текст (пойдет в Parent)
+                $data['table_chunks'] = $tableChunks;  // Массив готовых плоских чанков (пойдет прямо в Child)
 
                 $responseMsg = new AMQPMessage(json_encode($data), ['delivery_mode' => 2]);
                 $channel->basic_publish($responseMsg, '', 'document_enrichment_tasks');
 
-                CLI::write("[+] Результат успешно передан в очередь enrichment", 'green');
+                CLI::write("[+] Таблицы успешно линеаризованы (" . count($tableChunks) . " чанков) и переданы дальше", 'green');
                 $msg->ack();
 
             } catch (\Exception $e) {
