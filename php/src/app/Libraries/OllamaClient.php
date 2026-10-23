@@ -74,8 +74,6 @@ class OllamaClient
             $aiConfig = $this->aiConfig[$aiConfigKey];
 
             // Обычно эндпоинт генерации в Ollama — это '/api/generate'
-            // Если в вашем массиве $aiConfig['generate'] уже лежит этот путь, то склеится корректно.
-            // Если нет, вы можете заменить на: $aiConfig['host'] . '/api/generate'
             $url = $aiConfig['host'] . ($aiConfig['generate'] ?? '/api/generate');
 
             $ch = curl_init($url);
@@ -152,78 +150,6 @@ class OllamaClient
         return [];
     }
 
-    /**
-     * Диалог с моделью Qwen2.5 (Совместимо с Ollama локально и Polza.ai удаленно)
-     */
-    private function generateChat2($messages, string $aiConfigKey = self::AI_CONFIG_LOCAL, bool $jsonMode = true): string
-    {
-        $aiConfig = $this->aiConfig[$aiConfigKey];
-        $payload = [
-            'model'       => $aiConfig['chatModel'],
-            'messages'    => $messages,
-            'temperature' => 0.3,
-            'stream'      => false
-        ];
-
-        if ($jsonMode) {
-            $payload['extraBody'] = [
-                'responseFormat' => [
-                    'type' => 'json_object'
-                ]
-            ];
-        }
-
-        $logFile = fopen('/tmp/curl_debug.log', 'a+');
-        if ($logFile) {
-            $dateTime = date('Y-m-d H:i:s');
-            fwrite($logFile, "[$dateTime]=== СТАРТ ЛОГИРОВАНИЯ ЗАПРОСА ===\n");
-            fwrite($logFile, ">>> ТЕЛО ЗАПРОСА JSON:\n" . json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) . "\n\n");
-        }
-        $ch = curl_init($aiConfig['host'] . $aiConfig['chat']);
-        $token = '';
-        if (!empty($aiConfig['token'])) {
-            $token = 'Authorization: Bearer ' .  $aiConfig['token'];
-        }
-
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
-            CURLOPT_TIMEOUT        => 90,
-            CURLOPT_SSL_VERIFYPEER => $aiConfig['verify'],
-            CURLOPT_HTTPHEADER     => [
-                'Content-Type: application/json',
-                'Accept: application/json',
-                $token
-            ]
-        ]);
-
-        /** @var string|false $responseBody */
-        $responseBody = curl_exec($ch);
-        $httpCode     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlError    = curl_error($ch);
-
-        curl_close($ch);
-
-        if ($logFile) {
-            fwrite($logFile, "<<< ТЕЛО ОТВЕТА (RESPONSE BODY):\n" . ($responseBody ?: 'НЕТ ОТВЕТА') . "\n\n");
-        }
-
-        if ($responseBody === false || $httpCode !== 200) {
-            log_message('error', 'Polza API Error. HTTP: ' . $httpCode . ' Error: ' . $curlError);
-            if ($logFile) {
-                fwrite($logFile, "<<< code:[$httpCode] ОШИБКА:\n" . ($curlError) .":  =CURL". "\n\n");
-                fclose($logFile);
-            }
-            return '';
-        }
-
-        if ($logFile) {
-            fwrite($logFile, "=== КОНЕЦ ЛОГИРОВАНИЯ ===\n");
-        }
-
-        return $responseBody;
-    }
 
     private function generateChat($messages, string $aiConfigKey = self::AI_CONFIG_LOCAL, bool $jsonMode = true): string
     {
